@@ -71,7 +71,7 @@ def handle_callback(call):
         }
 
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton(f"✨ กลับเข้างาน (กดโดย {u_name})", callback_data=f"back_{mid}_{u_id}"))
+        markup.add(types.InlineKeyboardButton(f"✨ คืนบัตรแล้ว (กดโดย {u_name})", callback_data=f"back_{mid}_{u_id}"))
         
         bot.edit_message_text(
             chat_id=call.message.chat.id,
