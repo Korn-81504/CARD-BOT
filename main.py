@@ -103,7 +103,7 @@ def handle_callback(call):
             h, rem = divmod(int(diff.total_seconds()), 3600)
             m, s = divmod(rem, 60)
 
-            res = (f"✅ **คืนบัตรให้ซุปแล้ว**\n"
+            res = (f"✅ **คืนบัตรแล้ว**\n"
                    f"👥 ทีม: **{info['team']}**\n"
                    f"👤 ผู้แจ้ง: **{info['user']}**\n"
                    f"🕒 เริ่มเมื่อ: `{start_t.strftime('%H:%M:%S')}`\n"
