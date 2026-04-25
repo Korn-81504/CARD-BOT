@@ -12,9 +12,12 @@ bot = telebot.TeleBot(TOKEN)
 CROP_BOOK = {
     "basil": {"name": "กะเพรา", "emoji": "🌿", "time": 60, "buy": 50, "sell": 120, "exp": 20},
     "tomato": {"name": "มะเขือเทศ", "emoji": "🍅", "time": 180, "buy": 150, "sell": 400, "exp": 50},
-    "melon": {"name": "เมล่อน", "emoji": "🍈", "time": 600, "buy": 500, "sell": 2000, "exp": 150},
-    "pineapple": {"name": "สับปะรด", "emoji": "🍍", "time": 1200, "buy": 1000, "sell": 4500, "exp": 300},
-    "grapes": {"name": "องุ่น", "emoji": "🍇", "time": 1800, "buy": 2000, "sell": 9000, "exp": 500}
+    "banana": {"name": "กล้วยหอม", "emoji": "🍌", "time": 300, "buy": 300, "sell": 850, "exp": 80},
+    "orange": {"name": "ส้มสายน้ำผึ้ง", "emoji": "🍊", "time": 450, "buy": 400, "sell": 1200, "exp": 100},
+    "watermelon": {"name": "แตงโม", "emoji": "🍉", "time": 900, "buy": 800, "sell": 2800, "exp": 200},
+    "strawberry": {"name": "สตอเบอรี่", "emoji": "🍓", "time": 1500, "buy": 1500, "sell": 6000, "exp": 400},
+    "mango": {"name": "มะม่วงน้ำดอกไม้", "emoji": "🥭", "time": 2400, "buy": 3000, "sell": 14000, "exp": 700},
+    "durian": {"name": "ทุเรียนหมอนทอง", "emoji": "👑", "time": 3600, "buy": 5000, "sell": 25000, "exp": 1200},
 }
 
 ANIMAL_BOOK = {
@@ -26,13 +29,10 @@ ANIMAL_BOOK = {
 def init_db():
     conn = sqlite3.connect('farm_game.db')
     c = conn.cursor()
-    # ตารางผู้เล่น
     c.execute('''CREATE TABLE IF NOT EXISTS players 
-                 (user_id TEXT PRIMARY KEY, name TEXT, money INTEGER, exp INTEGER, level INTEGER)''')
-    # ตารางปลูกผัก
+                 (user_id TEXT PRIMARY KEY, name TEXT, money INTEGER, exp INTEGER, level INTEGER, dog_until REAL DEFAULT 0)''')
     c.execute('''CREATE TABLE IF NOT EXISTS plots 
                  (plot_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, crop_key TEXT, plant_time REAL)''')
-    # ตารางเลี้ยงสัตว์
     c.execute('''CREATE TABLE IF NOT EXISTS animals 
                  (ani_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, ani_key TEXT, last_collect REAL)''')
     conn.commit()
@@ -60,16 +60,21 @@ def check_levelup(user_id):
         return new_lvl
     return None
 
+def get_weather():
+    events = [("☀️ แดดจัด", 1), ("🌧️ ฝนตก (โตเร็ว x2!)", 2), ("☁️ เมฆมาก", 1)]
+    return random.choice(events)
+
 # --- 3. คำสั่งหลัก ---
 
 @bot.message_handler(commands=['start'])
 def start(message):
     uid = str(message.from_user.id)
-    name = message.from_user.first_name
+    # แสดงชื่อเป็นตัวพิมพ์ใหญ่ตามที่ขอ
+    name = message.from_user.first_name.upper()
     if not get_player(uid):
         conn = sqlite3.connect('farm_game.db')
         c = conn.cursor()
-        c.execute("INSERT INTO players VALUES (?, ?, ?, ?, ?)", (uid, name, 1000, 0, 1))
+        c.execute("INSERT INTO players (user_id, name, money, exp, level) VALUES (?, ?, ?, ?, ?)", (uid, name, 1000, 0, 1))
         conn.commit()
         conn.close()
         msg = f"🚜 ยินดีต้อนรับเกษตรกรใหม่คุณ {name}! รับเงินขวัญถุง 1,000.-"
@@ -79,24 +84,35 @@ def start(message):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add('🚜 ตรวจฟาร์ม', '🐥 ตรวจคอกสัตว์')
     markup.add('🛒 ร้านค้าเมล็ด', '🏪 ตลาดสัตว์')
-    markup.add('💰 กระเป๋าตังค์', '🏆 อันดับ')
+    markup.add('🛡️ จ้างหมาเฝ้าฟาร์ม (500.-)', '💰 กระเป๋าตังค์')
+    markup.add('🏆 อันดับ')
     bot.send_message(message.chat.id, msg, reply_markup=markup)
 
-# --- ระบบร้านค้า ---
+@bot.message_handler(func=lambda m: m.text == '🛡️ จ้างหมาเฝ้าฟาร์ม (500.-)')
+def buy_dog(message):
+    uid = str(message.from_user.id)
+    p = get_player(uid)
+    if p[2] >= 500:
+        protection_time = time.time() + 3600
+        conn = sqlite3.connect('farm_game.db')
+        c = conn.cursor()
+        c.execute("UPDATE players SET money = money - 500, dog_until = ? WHERE user_id = ?", (protection_time, uid))
+        conn.commit() ; conn.close()
+        bot.reply_to(message, "🐶 โฮ่ง! จ้างน้องหมามาช่วยเฝ้าฟาร์มแล้ว (กันขโมยได้ 1 ชม.)")
+    else:
+        bot.reply_to(message, "❌ เงินไม่พอจ้างน้องหมาครับ")
+
 @bot.message_handler(func=lambda m: m.text in ['🛒 ร้านค้าเมล็ด', '🏪 ตลาดสัตว์'])
 def shop(message):
-    p = get_player(message.from_user.id)
     markup = types.InlineKeyboardMarkup()
-    
     if "เมล็ด" in message.text:
-        text = "🌱 **ร้านขายเมล็ดพันธุ์**\nเลือกพืชที่ต้องการปลูก:"
+        text = "🌱 **ร้านขายเมล็ดพันธุ์ผลไม้**\nเลือกพืชที่ต้องการปลูก:"
         for k, v in CROP_BOOK.items():
             markup.add(types.InlineKeyboardButton(f"{v['emoji']} {v['name']} ({v['buy']}.-)", callback_data=f"buy_crop_{k}"))
     else:
         text = "🐄 **ตลาดค้าสัตว์**\nซื้อไปเลี้ยงเพื่อเก็บผลผลิตได้เรื่อยๆ:"
         for k, v in ANIMAL_BOOK.items():
             markup.add(types.InlineKeyboardButton(f"{v['emoji']} {v['name']} ({v['buy']}.-)", callback_data=f"buy_ani_{k}"))
-            
     bot.send_message(message.chat.id, text, reply_markup=markup, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('buy_'))
@@ -114,7 +130,7 @@ def handle_buying(call):
             c.execute("INSERT INTO plots (user_id, crop_key, plant_time) VALUES (?, ?, ?)", (uid, action[2], time.time()))
             conn.commit() ; conn.close()
             bot.answer_callback_query(call.id, f"ปลูก {item['name']} แล้ว!")
-            bot.edit_message_text(f"🌱 ปลูก {item['emoji']} เรียบร้อย! รอเก็บเกี่ยวได้เลย", call.message.chat.id, call.message.message_id)
+            bot.edit_message_text(f"🌱 ปลูก {item['emoji']} {item['name']} เรียบร้อย! รดน้ำรอเก็บเกี่ยว", call.message.chat.id, call.message.message_id)
         else: bot.answer_callback_query(call.id, "เงินไม่พอจ้า!", show_alert=True)
             
     elif action[1] == "ani":
@@ -125,14 +141,14 @@ def handle_buying(call):
             c.execute("UPDATE players SET money = money - ? WHERE user_id = ?", (item['buy'], uid))
             c.execute("INSERT INTO animals (user_id, ani_key, last_collect) VALUES (?, ?, ?)", (uid, action[2], time.time()))
             conn.commit() ; conn.close()
-            bot.answer_callback_query(call.id, f"ซื้อ {item['name']} เข้าคอกแล้ว!")
-            bot.edit_message_text(f"✨ {item['emoji']} เข้าคอกเรียบร้อย! มันจะผลิตของให้คุณเรื่อยๆ", call.message.chat.id, call.message.message_id)
+            bot.answer_callback_query(call.id, f"ซื้อ {item['name']} แล้ว!")
+            bot.edit_message_text(f"✨ {item['emoji']} เข้าคอกเรียบร้อย! รอเก็บผลผลิตนะ", call.message.chat.id, call.message.message_id)
         else: bot.answer_callback_query(call.id, "เงินไม่พอซื้อสัตว์!", show_alert=True)
 
-# --- ระบบตรวจฟาร์มและเก็บเกี่ยว ---
 @bot.message_handler(func=lambda m: m.text == '🚜 ตรวจฟาร์ม')
 def view_farm(message):
     uid = str(message.from_user.id)
+    weather_name, speed = get_weather()
     conn = sqlite3.connect('farm_game.db')
     c = conn.cursor()
     c.execute("SELECT plot_id, crop_key, plant_time FROM plots WHERE user_id=?", (uid,))
@@ -140,18 +156,22 @@ def view_farm(message):
     conn.close()
 
     if not plots:
-        bot.send_message(message.chat.id, "ฟาร์มว่างเปล่า ลองไปซื้อเมล็ดมาปลูกดูนะ")
+        bot.send_message(message.chat.id, "🏜️ ฟาร์มว่างเปล่า ไปหาซื้อเมล็ดมาปลูกกันเถอะ")
         return
 
-    res = "👨‍🌾 **ฟาร์มของคุณ**\n\n"
+    res = f"🌤 สภาพอากาศ: **{weather_name}**\n👨‍🌾 **ฟาร์มของคุณ**\n\n"
     now = time.time()
     for pid, key, ptime in plots:
         crop = CROP_BOOK[key]
-        remain = crop['time'] - (now - ptime)
-        if remain <= 0:
-            res += f"✅ {crop['emoji']} {crop['name']} | เก็บเกี่ยว: /harvest_{pid}\n"
+        elapsed = (now - ptime) * speed
+        percent = int((elapsed / crop['time']) * 100)
+        
+        if percent >= 100:
+            res += f"✅ {crop['emoji']} {crop['name']} | **สุกแล้ว!** /harvest_{pid}\n"
         else:
-            res += f"⏳ {crop['emoji']} {crop['name']} | อีก {int(remain)} วิ\n"
+            bar_count = min(percent // 10, 10)
+            bar = "▓" * bar_count + "░" * (10 - bar_count)
+            res += f"⏳ {crop['emoji']} {crop['name']} | {bar} {percent}%\n"
     bot.send_message(message.chat.id, res, parse_mode="Markdown")
 
 @bot.message_handler(regexp=r'/harvest_(\d+)')
@@ -167,12 +187,11 @@ def harvest(message):
         c.execute("UPDATE players SET money = money + ?, exp = exp + ? WHERE user_id = ?", (crop['sell'], crop['exp'], uid))
         c.execute("DELETE FROM plots WHERE plot_id=?", (pid,))
         conn.commit() ; conn.close()
-        bot.reply_to(message, f"Basket! เก็บ {crop['emoji']} ขายได้ {crop['sell']}.- ✨+{crop['exp']} EXP")
+        bot.reply_to(message, f"💰 เก็บ {crop['emoji']} ขายได้ {crop['sell']:,}.- ✨+{crop['exp']} EXP")
         new_lvl = check_levelup(uid)
-        if new_lvl: bot.send_message(message.chat.id, f"🎊 LEVEL UP! ตอนนี้เลเวล {new_lvl} แล้ว!")
-    else: bot.reply_to(message, "ไม่มีพืชนี้แล้ว หรืออาจจะโดนขโมยไป!")
+        if new_lvl: bot.send_message(message.chat.id, f"🎊 LEVEL UP! คุณเลเวล {new_lvl} แล้ว!")
+    else: bot.reply_to(message, "❌ ไม่พบพืชชิ้นนี้")
 
-# --- ระบบเลี้ยงสัตว์ ---
 @bot.message_handler(func=lambda m: m.text == '🐥 ตรวจคอกสัตว์')
 def view_barn(message):
     uid = str(message.from_user.id)
@@ -208,40 +227,45 @@ def collect_yield(message):
         c.execute("UPDATE players SET money = money + ?, exp = exp + ? WHERE user_id = ?", (ani['yield'], ani['exp'], uid))
         c.execute("UPDATE animals SET last_collect = ? WHERE ani_id = ?", (time.time(), aid))
         conn.commit() ; conn.close()
-        bot.reply_to(message, f"🥛 เก็บผลผลิตจาก {ani['name']} ได้เงิน {ani['yield']}.- ✨+{ani['exp']} EXP")
+        bot.reply_to(message, f"🥛 เก็บผลผลิตจาก {ani['emoji']} ได้ {ani['yield']:,}.- ✨+{ani['exp']} EXP")
     else: bot.reply_to(message, "ไม่พบสัตว์ตัวนี้")
 
-# --- ระบบขโมย (Steal) ---
 @bot.message_handler(commands=['steal'])
 def steal(message):
     uid = str(message.from_user.id)
     if not message.reply_to_message:
-        bot.reply_to(message, "⚠️ วิธีขโมย: ให้ Reply ข้อความของเพื่อนแล้วพิมพ์ /steal")
+        bot.reply_to(message, "⚠️ วิธีขโมย: ให้ Reply ข้อความเพื่อนแล้วพิมพ์ /steal")
         return
     victim_id = str(message.reply_to_message.from_user.id)
     if uid == victim_id: return
     
+    v_data = get_player(victim_id)
+    if v_data and v_data[5] > time.time():
+        bot.reply_to(message, "🚫 ขโมยไม่สำเร็จ! บ้านนี้มีหมาดุมาก คุณเผ่นหนีเกือบไม่ทัน")
+        return
+
     conn = sqlite3.connect('farm_game.db')
     c = conn.cursor()
-    c.execute("SELECT plot_id, crop_key FROM plots WHERE user_id=?", (victim_id,))
+    c.execute("SELECT plot_id, crop_key, plant_time FROM plots WHERE user_id=?", (victim_id,))
     plots = c.fetchall()
     
-    if plots and random.random() < 0.4: # โอกาส 40%
-        target = random.choice(plots)
+    ready = [p for p in plots if (time.time() - p[2]) >= CROP_BOOK[p[1]]['time']]
+    
+    if ready and random.random() < 0.4:
+        target = random.choice(ready)
         crop = CROP_BOOK[target[1]]
-        loot = int(crop['sell'] * 0.8)
+        loot = int(crop['sell'] * 0.7)
         c.execute("DELETE FROM plots WHERE plot_id=?", (target[0],))
         c.execute("UPDATE players SET money = money + ? WHERE user_id=?", (loot, uid))
         conn.commit()
         bot.reply_to(message, f"🥷 ขโมยสำเร็จ! คุณจิ๊ก {crop['emoji']} {crop['name']} ของเพื่อนไปขาย ได้เงิน {loot}.-")
     else:
-        penalty = 150
+        penalty = 200
         c.execute("UPDATE players SET money = MAX(0, money - ?) WHERE user_id=?", (penalty, uid))
         conn.commit()
         bot.reply_to(message, f"👮‍♂️ โดนจับได้! คุณถูกปรับ {penalty}.-")
     conn.close()
 
-# --- ระบบข้อมูลและอันดับ ---
 @bot.message_handler(func=lambda m: m.text == '💰 กระเป๋าตังค์')
 def wallet(message):
     p = get_player(message.from_user.id)
@@ -259,5 +283,5 @@ def top_players(message):
 
 if __name__ == "__main__":
     init_db()
-    print("Farm Bot with Animals & Steal System is Running...")
+    print("Farm Bot with Expanded Fruits is Running...")
     bot.polling(none_stop=True)
