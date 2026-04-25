@@ -1,125 +1,151 @@
-import os
+import sqlite3
 import telebot
 from telebot import types
-from datetime import datetime, timedelta, timezone
+import time
+import random
 
-# --- ข้อมูลสำคัญ ---
-API_TOKEN = os.environ.get('API_TOKEN', '8618360067:AAHA7FxHpnXXtTqF-dwWoD25iMWQZ6G8Jr0')
+# ⚠️ แก้ไขตรงนี้: ใส่ Token ที่ได้จาก @BotFather
+TOKEN = "8618360067:AAHA7FxHpnXXtTqF-dwWoD25iMWQZ6G8Jr0"
+bot = telebot.TeleBot(TOKEN)
 
-# กำหนดทีมและอิโมจิ
-TEAMS = {
-    "DEPOSIT": "💰 DEPOSIT",
-    "WITHDRAW": "🤖 WITHDRAW AUTO",
-    "MANUAL": "👤 WITHDRAW MANUAL",
-    "ENQUIRY": "💬 ENQUIRY"
+# --- 1. ระบบฐานข้อมูล (SQLite) ---
+def init_db():
+    conn = sqlite3.connect('farm_game.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS players 
+                 (user_id TEXT PRIMARY KEY, name TEXT, money INTEGER, exp INTEGER, level INTEGER)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS plots 
+                 (plot_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, crop_key TEXT, plant_time REAL)''')
+    conn.commit()
+    conn.close()
+
+# --- 2. ข้อมูลผัก (Emoji & Spec) ---
+CROP_BOOK = {
+    "basil": {"name": "กะเพรา", "emoji": "🌿", "time": 60, "buy": 50, "sell": 120, "exp": 20},
+    "tomato": {"name": "มะเขือเทศ", "emoji": "🍅", "time": 180, "buy": 150, "sell": 400, "exp": 50},
+    "melon": {"name": "เมล่อน", "emoji": "🍈", "time": 600, "buy": 500, "sell": 2000, "exp": 150}
 }
 
-# ฐานข้อมูลชั่วคราว (แนะนำให้ใช้ไฟล์ JSON หรือ Database ในอนาคตถ้ากลัวข้อมูลหายเมื่อบอทดับ)
-TEMP_DB = {}
+# --- 3. ฟังก์ชันระบบเกม ---
 
-def get_thai_now():
-    return datetime.now(timezone(timedelta(hours=7)))
+def get_player(user_id):
+    conn = sqlite3.connect('farm_game.db')
+    c = conn.cursor()
+    c.execute("SELECT * FROM players WHERE user_id=?", (str(user_id),))
+    p = c.fetchone()
+    conn.close()
+    return p
 
-bot = telebot.TeleBot(API_TOKEN)
-
-# --- HANDLERS ---
-
-@bot.message_handler(commands=['start', 'out'])
+@bot.message_handler(commands=['start'])
 def start(message):
-    u_id = message.from_user.id
-    markup = types.InlineKeyboardMarkup(row_width=1)
+    uid = str(message.from_user.id)
+    name = message.from_user.first_name
     
-    # สร้างปุ่มสำหรับแต่ละทีม
-    for key, display_name in TEAMS.items():
-        btn = types.InlineKeyboardButton(display_name, callback_data=f"out_{key}_{u_id}")
+    if not get_player(uid):
+        conn = sqlite3.connect('farm_game.db')
+        c = conn.cursor()
+        c.execute("INSERT INTO players VALUES (?, ?, ?, ?, ?)", (uid, name, 500, 0, 1))
+        conn.commit()
+        conn.close()
+        msg = f"🌾 ยินดีต้อนรับคุณ {name}! เรามอบเงินขวัญถุงให้ 500.-"
+    else:
+        msg = f"ยินดีต้อนรับกลับมาครับคุณ {name}!"
+
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add('🚜 ตรวจฟาร์ม', '🛒 ร้านค้า', '💰 กระเป๋าตังค์')
+    bot.send_message(message.chat.id, msg, reply_markup=markup)
+
+# --- ระบบร้านค้า (Inline Buttons) ---
+@bot.message_handler(func=lambda m: m.text == '🛒 ร้านค้า')
+def shop(message):
+    p = get_player(message.from_user.id)
+    text = f"💰 เงินของคุณ: {p[2]} บาท\nเลือกซื้อเมล็ดพันธุ์ที่ต้องการปลูก:"
+    
+    markup = types.InlineKeyboardMarkup()
+    for key, val in CROP_BOOK.items():
+        btn = types.InlineKeyboardButton(f"{val['emoji']} {val['name']} ({val['buy']}.-)", callback_data=f"buy_{key}")
         markup.add(btn)
-        
-    btn_cancel = types.InlineKeyboardButton("❌ ปิดเมนู", callback_data=f"c_{u_id}")
-    markup.add(btn_cancel)
+    
+    bot.send_message(message.chat.id, text, reply_markup=markup)
 
-    bot.send_message(
-        chat_id=message.chat.id,
-        message_thread_id=message.message_thread_id,
-        text=f"🕒 **ระบบบันทึกเวลาทีมงาน**\nกรุณาเลือกทีมของคุณเพื่อเริ่มจับเวลา:",
-        reply_markup=markup,
-        parse_mode="Markdown"
-    )
+# --- ระบบจัดการปุ่มกด (Callback) ---
+@bot.callback_query_handler(func=lambda call: call.data.startswith('buy_'))
+def handle_buy(call):
+    uid = str(call.from_user.id)
+    crop_key = call.data.split('_')[1]
+    crop = CROP_BOOK[crop_key]
+    p = get_player(uid)
+    
+    if p[2] >= crop['buy']:
+        # หักเงินและปลูกทันที
+        conn = sqlite3.connect('farm_game.db')
+        c = conn.cursor()
+        c.execute("UPDATE players SET money = money - ? WHERE user_id = ?", (crop['buy'], uid))
+        c.execute("INSERT INTO plots (user_id, crop_key, plant_time) VALUES (?, ?, ?)", (uid, crop_key, time.time()))
+        conn.commit()
+        conn.close()
+        bot.answer_callback_query(call.id, f"ปลูก {crop['name']} สำเร็จ!")
+        bot.edit_message_text(f"🌱 ปลูก {crop['name']} เรียบร้อย! รอโตแล้วมาเก็บเกี่ยวนะ", call.message.chat.id, call.message.message_id)
+    else:
+        bot.answer_callback_query(call.id, "เงินไม่พอจ้า!", show_alert=True)
 
-@bot.callback_query_handler(func=lambda c: True)
-def handle_callback(call):
-    data = call.data.split('_')
-    cmd = data[0]
+@bot.message_handler(func=lambda m: m.text == '🚜 ตรวจฟาร์ม')
+def view_farm(message):
+    uid = str(message.from_user.id)
+    conn = sqlite3.connect('farm_game.db')
+    c = conn.cursor()
+    c.execute("SELECT plot_id, crop_key, plant_time FROM plots WHERE user_id=?", (uid,))
+    plots = c.fetchall()
+    conn.close()
 
-    # --- 1. ปิดเมนู ---
-    if cmd == 'c':
-        bot.delete_message(call.message.chat.id, call.message.message_id)
+    if not plots:
+        bot.send_message(message.chat.id, "ไม่มีอะไรในฟาร์มเลย ไปซื้อเมล็ดที่ร้านค้าสิ!")
         return
 
-    # --- 2. แจ้งออก (เริ่มจับเวลา) ---
-    if cmd == 'out':
-        team_key, u_id = data[1], data[2]
-        u_name = call.from_user.first_name # ดึงชื่อจาก Telegram User
-        now = get_thai_now()
-        mid = str(call.message.message_id)
-        
-        # เก็บข้อมูลลง DB
-        TEMP_DB[mid] = {
-            "time": now.isoformat(),
-            "team": TEAMS[team_key],
-            "user": u_name,
-            "uid": int(u_id)
-        }
-
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton(f"✨ คืนบัตรแล้ว (กดโดย {u_name})", callback_data=f"back_{mid}_{u_id}"))
-        
-        bot.edit_message_text(
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            text=(f"📍 **แจ้งเตือนการออกข้างนอก**\n"
-                  f"👥 ทีม: **{TEAMS[team_key]}**\n"
-                  f"👤 ผู้แจ้ง: **{u_name}**\n"
-                  f"🕒 เวลาเริ่ม: `{now.strftime('%H:%M:%S')}`"),
-            reply_markup=markup,
-            parse_mode="Markdown"
-        )
-
-    # --- 3. แจ้งกลับ (หยุดจับเวลา) ---
-    if cmd == 'back':
-        msg_id, out_uid = data[1], int(data[2])
-        
-        # เช็คว่าคนกดกลับคือคนเดียวกับคนกดออกไหม
-        if call.from_user.id != out_uid:
-            bot.answer_callback_query(call.id, "⚠️ เฉพาะคนที่แจ้งออกเท่านั้นที่กดกลับได้!", show_alert=True)
-            return
-
-        now = get_thai_now()
-        if msg_id in TEMP_DB:
-            info = TEMP_DB[msg_id]
-            start_t = datetime.fromisoformat(info["time"])
-            diff = now - start_t
-            
-            # คำนวณเวลา
-            h, rem = divmod(int(diff.total_seconds()), 3600)
-            m, s = divmod(rem, 60)
-
-            res = (f"✅ **คืนบัตรแล้ว**\n"
-                   f"👥 ทีม: **{info['team']}**\n"
-                   f"👤 ผู้แจ้ง: **{info['user']}**\n"
-                   f"🕒 เริ่มเมื่อ: `{start_t.strftime('%H:%M:%S')}`\n"
-                   f"✨ กลับเมื่อ: `{now.strftime('%H:%M:%S')}`\n"
-                   f"⌛️ ใช้เวลาไป: **{h} ชม. {m} นาที {s} วินาที**")
-
-            del TEMP_DB[msg_id]
-            bot.edit_message_text(
-                chat_id=call.message.chat.id,
-                message_id=int(msg_id),
-                text=res,
-                parse_mode="Markdown"
-            )
+    res = "👨‍🌾 **ฟาร์มของคุณ**\n\n"
+    now = time.time()
+    for pid, key, ptime in plots:
+        crop = CROP_BOOK[key]
+        remain = crop['time'] - (now - ptime)
+        if remain <= 0:
+            res += f"✅ {crop['emoji']} {crop['name']} (โตแล้ว!) คลิก -> /harvest_{pid}\n"
         else:
-            bot.answer_callback_query(call.id, "❌ ไม่พบข้อมูล หรือมีการกดกลับไปแล้ว")
+            res += f"⏳ {crop['emoji']} {crop['name']} (รออีก {int(remain)} วิ)\n"
+    
+    bot.send_message(message.chat.id, res, parse_mode="Markdown")
 
+@bot.message_handler(func=lambda m: m.text == '💰 กระเป๋าตังค์')
+def wallet(message):
+    p = get_player(message.from_user.id)
+    bot.reply_to(message, f"👤 ชื่อ: {p[1]}\n⭐ เลเวล: {p[4]}\n✨ EXP: {p[3]}\n💰 เงิน: {p[2]} บาท")
+
+# --- ระบบเก็บเกี่ยว ---
+@bot.message_handler(regexp=r'/harvest_(\d+)')
+def harvest(message):
+    pid = message.text.split('_')[1]
+    uid = str(message.from_user.id)
+    
+    conn = sqlite3.connect('farm_game.db')
+    c = conn.cursor()
+    c.execute("SELECT crop_key FROM plots WHERE plot_id=? AND user_id=?", (pid, uid))
+    row = c.fetchone()
+    
+    if row:
+        crop = CROP_BOOK[row[0]]
+        # ให้เงินและ EXP
+        c.execute("UPDATE players SET money = money + ?, exp = exp + ? WHERE user_id = ?", (crop['sell'], crop['exp'], uid))
+        c.execute("DELETE FROM plots WHERE plot_id=?", (pid,))
+        conn.commit()
+        conn.close()
+        bot.reply_to(message, f"🧺 เก็บเกี่ยว {crop['emoji']} ขายได้ {crop['sell']}.- และได้รับ {crop['exp']} EXP!")
+    else:
+        bot.reply_to(message, "ไม่พบข้อมูลการเก็บเกี่ยว หรืออาจเก็บไปแล้ว")
+
+# --- รันบอท ---
 if __name__ == "__main__":
-    print("TEAM TRACKING BOT IS RUNNING...")
-    bot.infinity_polling()
+    init_db()
+    print("Farm Bot is Running...")
+    try:
+        bot.polling(none_stop=True)
+    except Exception as e:
+        print(f"Error: {e}")
