@@ -12,7 +12,7 @@ bot = telebot.TeleBot(TOKEN)
 CROP_BOOK = {
     "basil": {"name": "กะเพรา", "emoji": "🌿", "time": 60, "buy": 50, "sell": 120, "exp": 20},
     "tomato": {"name": "มะเขือเทศ", "emoji": "🍅", "time": 180, "buy": 150, "sell": 400, "exp": 50},
-    "banana": {"name": "⭐กล้วยหอม", "emoji": "🍌", "time": 300, "buy": 300, "sell": 850, "exp": 80},
+    "banana": {"name": "กล้วยหอม", "emoji": "🍌", "time": 300, "buy": 300, "sell": 850, "exp": 80},
     "orange": {"name": "ส้มสายน้ำผึ้ง", "emoji": "🍊", "time": 450, "buy": 400, "sell": 1200, "exp": 100},
     "watermelon": {"name": "แตงโม", "emoji": "🍉", "time": 900, "buy": 800, "sell": 2800, "exp": 200},
     "strawberry": {"name": "สตอเบอรี่", "emoji": "🍓", "time": 1500, "buy": 1500, "sell": 6000, "exp": 400},
@@ -27,6 +27,7 @@ ANIMAL_BOOK = {
 
 # --- 2. ระบบฐานข้อมูล ---
 def get_db():
+    # เพิ่ม check_same_thread=False เพื่อป้องกันข้อผิดพลาดเวลาใช้งานพร้อมกัน
     return sqlite3.connect('farm_game.db', check_same_thread=False)
 
 def init_db():
@@ -171,6 +172,7 @@ def view_farm(message):
         percent = int((elapsed / crop['time']) * 100)
         
         if percent >= 100:
+            # แก้ไขตรงนี้: ใส่ขีดล่าง (_) ให้ตรงกับ Regexp
             res += f"✅ {crop['emoji']} {crop['name']} | **สุกแล้ว!** /harvest_{pid}\n"
         else:
             bar_count = min(percent // 10, 10)
@@ -178,11 +180,10 @@ def view_farm(message):
             res += f"⏳ {crop['emoji']} {crop['name']} | {bar} {percent}%\n"
     bot.send_message(message.chat.id, res, parse_mode="Markdown")
 
-# --- จุดแก้ไขสำคัญ: แก้ไขคำสั่งเก็บเกี่ยว ---
+# --- จุดแก้ไข: ระบบเก็บเกี่ยวให้แม่นยำ ---
 @bot.message_handler(regexp=r'^/harvest_(\d+)')
 def harvest(message):
     try:
-        # ดึงเลข ID จากคำสั่ง /harvest_123
         pid = int(message.text.split('_')[1].split('@')[0])
     except:
         return
@@ -191,24 +192,18 @@ def harvest(message):
     conn = get_db()
     c = conn.cursor()
     
-    # ตรวจสอบว่ามีพืชชิ้นนี้อยู่จริงและเป็นของคนคนนี้
     c.execute("SELECT crop_key FROM plots WHERE plot_id=? AND user_id=?", (pid, uid))
     row = c.fetchone()
     
     if row:
-        crop_key = row[0]
-        crop = CROP_BOOK[crop_key]
-        
-        # 1. ลบออกจากแปลงทันที
+        crop = CROP_BOOK[row[0]]
         c.execute("DELETE FROM plots WHERE plot_id=?", (pid,))
-        # 2. เพิ่มเงินและค่าประสบการณ์
         c.execute("UPDATE players SET money = money + ?, exp = exp + ? WHERE user_id = ?", (crop['sell'], crop['exp'], uid))
         conn.commit()
         conn.close()
         
         bot.reply_to(message, f"💰 เก็บเกี่ยว {crop['emoji']} {crop['name']} ขายได้ {crop['sell']:,}.- ✨+{crop['exp']} EXP")
         
-        # เช็คเลเวลอัป
         new_lvl = check_levelup(uid)
         if new_lvl: 
             bot.send_message(message.chat.id, f"🎊 LEVEL UP! ตอนนี้เลเวล {new_lvl} แล้ว!")
@@ -238,7 +233,6 @@ def view_barn(message):
             res += f"⏳ {ani['emoji']} {ani['name']} | รอกินหญ้าอีก {int(remain)} วิ\n"
     bot.send_message(message.chat.id, res, parse_mode="Markdown")
 
-# --- จุดแก้ไขสำคัญ: แก้ไขคำสั่งเก็บผลผลิตสัตว์ ---
 @bot.message_handler(regexp=r'^/collect_(\d+)')
 def collect_yield(message):
     try:
@@ -250,15 +244,12 @@ def collect_yield(message):
     conn = get_db()
     c = conn.cursor()
     
-    # ตรวจเช็คว่าสัตว์มีตัวตนอยู่จริง
     c.execute("SELECT ani_key FROM animals WHERE ani_id=? AND user_id=?", (aid, uid))
     row = c.fetchone()
     
     if row:
         ani = ANIMAL_BOOK[row[0]]
-        # เพิ่มเงินและ EXP
         c.execute("UPDATE players SET money = money + ?, exp = exp + ? WHERE user_id = ?", (ani['yield'], ani['exp'], uid))
-        # อัปเดตเวลาเก็บล่าสุด
         c.execute("UPDATE animals SET last_collect = ? WHERE ani_id = ?", (time.time(), aid))
         conn.commit()
         conn.close()
@@ -286,7 +277,11 @@ def steal(message):
     c.execute("SELECT plot_id, crop_key, plant_time FROM plots WHERE user_id=?", (victim_id,))
     plots = c.fetchall()
     
-    ready = [p for p in plots if (time.time() - p[2]) >= CROP_BOOK[p[1]]['time']]
+    # เช็คว่ามีพืชสุกแล้วไหม
+    ready = []
+    for p in plots:
+        if (time.time() - p[2]) >= CROP_BOOK[p[1]]['time']:
+            ready.append(p)
     
     if ready and random.random() < 0.4:
         target = random.choice(ready)
@@ -322,5 +317,5 @@ def top_players(message):
 
 if __name__ == "__main__":
     init_db()
-    print("Bot is ready! (สำเร็จรูป: แก้ไขระบบเก็บเกี่ยวเรียบร้อย)")
+    print("Bot is ready! (ฉบับแก้ไข /harvest_ เรียบร้อย)")
     bot.polling(none_stop=True)
