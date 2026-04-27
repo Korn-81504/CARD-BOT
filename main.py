@@ -12,7 +12,7 @@ bot = telebot.TeleBot(TOKEN)
 CROP_BOOK = {
     "basil": {"name": "กะเพรา", "emoji": "🌿", "time": 60, "buy": 50, "sell": 120, "exp": 20},
     "tomato": {"name": "มะเขือเทศ", "emoji": "🍅", "time": 180, "buy": 150, "sell": 400, "exp": 50},
-    "banana": {"name": "กล้วยหอม", "emoji": "🍌", "time": 300, "buy": 300, "sell": 850, "exp": 80},
+    "banana": {"name": "⭐กล้วยหอม", "emoji": "🍌", "time": 300, "buy": 300, "sell": 850, "exp": 80},
     "orange": {"name": "ส้มสายน้ำผึ้ง", "emoji": "🍊", "time": 450, "buy": 400, "sell": 1200, "exp": 100},
     "watermelon": {"name": "แตงโม", "emoji": "🍉", "time": 900, "buy": 800, "sell": 2800, "exp": 200},
     "strawberry": {"name": "สตอเบอรี่", "emoji": "🍓", "time": 1500, "buy": 1500, "sell": 6000, "exp": 400},
